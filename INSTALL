@@ -13,7 +13,7 @@ The revision of the Clang/LLVM (and Polly) have to match in order to compile the
 HIPAcc sources successfully. The file 'dependencies.sh' lists the revisions and
 repositories of each dependency known to work with the latest version of HIPAcc.
 Use 'git checkout <revision>' in order to switch to the required revision.
-  
+
 
 Installation:
 =============
@@ -64,3 +64,9 @@ mkdir build && cd build
 cmake ../ -DCMAKE_INSTALL_PREFIX=`pwd`/release
 make && make install
 
+Note for building hipacc on kiwi:
+mkdir build && cd build
+cmake ../ -DCMAKE_INSTALL_PREFIX=`pwd`/release -DLLVM_DIR=/nobackup/jingpu/tools/llvm3.6/build/share/llvm/cmake/
+setenv CPLUS_INCLUDE_PATH /nobackup/jingpu/tools/llvm3.6/tools/clang/include/
+setenv CPLUS_INCLUDE_PATH "/nobackup/jingpu/tools/llvm3.6/build/tools/clang/include:$CPLUS_INCLUDE_PATH"
+make && make install

@@ -1,0 +1,10 @@
+*~
+\#*\#
+.\#*\#
+.\#*
+*.o
+*.a
+*.so
+vivado_hls.log
+hipacc_project/
+directives.tcl
