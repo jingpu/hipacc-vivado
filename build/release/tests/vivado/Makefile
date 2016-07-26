@@ -146,7 +146,7 @@ else
 	cp build_$@/main_renderscript ./main_$@
 endif
 
-export CPLUS_INCLUDE_PATH := $(CPLUS_INCLUDE_PATH):/horowitz/users/jingpu/nobackup/hipacc-vivado/build/release/include
+#export CPLUS_INCLUDE_PATH := $(CPLUS_INCLUDE_PATH):/horowitz/users/jingpu/nobackup/hipacc-vivado/build/release/include
 
 vivado: vivado_hls.log
 

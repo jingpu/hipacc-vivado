@@ -46,12 +46,15 @@
 #define WIDTH  24
 #define HEIGHT 24
 #else
-#define WIDTH  1024
-#define HEIGHT 1024
+#define WIDTH  1920
+#define HEIGHT 1080
 #endif
-#define SIZE_X 3
-#define SIZE_Y 3
 
+
+#define blockSize  3
+#define Ksize      3
+#define k          0.04f
+#define threshold  100
 
 using namespace hipacc;
 
@@ -78,16 +81,16 @@ class Sobel : public Kernel<short> {
       sum += reduce(dom, Reduce::SUM, [&] () -> short {
           return Input(dom) * cMask(dom);
       });
-      output() = sum / 6;
+      output() = sum;
     }
 };
 
-class Square1 : public Kernel<short> {
+class Square1 : public Kernel<int> {
   private:
     Accessor<short> &Input;
 
   public:
-    Square1(IterationSpace<short> &IS,
+    Square1(IterationSpace<int> &IS,
             Accessor<short> &Input)
           : Kernel(IS),
             Input(Input) {
@@ -99,13 +102,13 @@ class Square1 : public Kernel<short> {
       output() = in * in;
     }
 };
-class Square2 : public Kernel<short> {
+class Square2 : public Kernel<int> {
   private:
     Accessor<short> &Input1;
     Accessor<short> &Input2;
 
   public:
-    Square2(IterationSpace<short> &IS,
+    Square2(IterationSpace<int> &IS,
             Accessor<short> &Input1,
             Accessor<short> &Input2)
           : Kernel(IS),
@@ -120,14 +123,14 @@ class Square2 : public Kernel<short> {
     }
 };
 
-class Gauss : public Kernel<short> {
+class Gauss : public Kernel<int> {
   private:
-    Accessor<short> &Input;
+    Accessor<int> &Input;
     Mask<uchar> &cMask;
 
   public:
-    Gauss(IterationSpace<short> &IS,
-            Accessor<short> &Input, Mask<uchar> &cMask)
+    Gauss(IterationSpace<int> &IS,
+            Accessor<int> &Input, Mask<uchar> &cMask)
           : Kernel(IS),
             Input(Input),
             cMask(cMask) {
@@ -136,31 +139,26 @@ class Gauss : public Kernel<short> {
 
     void kernel() {
       int sum = 0;
-      sum += convolve(cMask, Reduce::SUM, [&] () -> float {
+      sum += convolve(cMask, Reduce::SUM, [&] () -> int {
           return Input(cMask) * cMask();
       });
-      output() = sum / 16;
+      output() = sum;
     }
 };
 
-class HarrisCorner : public Kernel<uchar> {
+class HarrisCorner : public Kernel<float> {
   private:
-    Accessor<short> &Dx;
-    Accessor<short> &Dy;
-    Accessor<short> &Dxy;
-    float k;
-    float threshold;
+    Accessor<int> &Dx;
+    Accessor<int> &Dy;
+    Accessor<int> &Dxy;
 
   public:
-    HarrisCorner(IterationSpace<uchar> &IS,
-            Accessor<short> &Dx, Accessor<short> &Dy, Accessor<short> &Dxy,
-            float k, float threshold)
+    HarrisCorner(IterationSpace<float> &IS,
+            Accessor<int> &Dx, Accessor<int> &Dy, Accessor<int> &Dxy)
           : Kernel(IS),
             Dx(Dx),
             Dy(Dy),
-            Dxy(Dxy),
-            k(k),
-            threshold(threshold) {
+            Dxy(Dxy) {
       add_accessor(&Dx);
       add_accessor(&Dy);
       add_accessor(&Dxy);
@@ -170,12 +168,40 @@ class HarrisCorner : public Kernel<uchar> {
       int x = Dx();
       int y = Dy();
       int xy = Dxy();
-      float R = 0;
-      R = ((x * y) - (xy * xy)) /* det   */
-          - (k * (x + y) * (x + y)); /* trace */
+      int scale = (1 << (Ksize-1)) * blockSize;
+      float fx = (x / scale / scale);
+      float fy = (y / scale / scale);
+      float fxy = (xy / scale / scale);
+      float R = ((fx * fy) - (fxy * fxy)) /* det   */
+        - (k * (fx + fy) * (fx + fy)); /* trace */
+      output() = R;
+    }
+};
+
+class NonMaxSuppression : public Kernel<uchar> {
+  private:
+    Accessor<float> &input;
+    Domain &dom;
+
+  public:
+    NonMaxSuppression(IterationSpace<uchar> &IS,
+                      Accessor<float> &input, Domain &dom)
+          : Kernel(IS),
+            input(input),
+            dom(dom) {
+      add_accessor(&input);
+    }
+
+    void kernel() {
+      float z = input();
+      bool is_max = true;
+      iterate(dom, [&] () {
+          if (dom.x() != 0 || dom.y() != 0)
+            is_max = is_max && (input(dom) < z);
+        });
       uchar out = 0;
-      if (R > threshold)
-        out = 1;
+      if (is_max && (input(0, 0) > threshold))
+        out = 255;
       output() = out;
     }
 };
@@ -185,19 +211,10 @@ class HarrisCorner : public Kernel<uchar> {
  * Main function                                                         *
  *************************************************************************/
 int main(int argc, const char **argv) {
-    float k = 0.04f;
-    float threshold = 20000.0f;
-
-    if (argc > 2) {
-      k = atof(argv[1]);
-      threshold = atof(argv[2]);
-    }
 
     const int width = WIDTH;
     const int height = HEIGHT;
 
-    const int size_x = SIZE_X;
-    const int size_y = SIZE_Y;
     double timing = 0.0;
 
     // host memory for image of of width x height pixels
@@ -234,50 +251,19 @@ int main(int argc, const char **argv) {
     //  }
     //}
 
-    // input and output image of width x height pixels
-    Image<uchar> IN(WIDTH, HEIGHT);
-    Image<uchar> OUT(WIDTH, HEIGHT);
-    Image<short> DX(WIDTH, HEIGHT);
-    Image<short> DY(WIDTH, HEIGHT);
-    Image<short> DXY(WIDTH, HEIGHT);
-    Image<short> SX(WIDTH, HEIGHT);
-    Image<short> SY(WIDTH, HEIGHT);
-    Image<short> SXY(WIDTH, HEIGHT);
-
     // convolution filter mask
-    const uchar filter_xy[SIZE_Y][SIZE_X] = {
-        #if SIZE_X == 3
-        { 1, 2, 1 },
-        { 2, 4, 2 },
-        { 1, 2, 1 }
-        //{ 0.057118f, 0.124758f, 0.057118f },
-        //{ 0.124758f, 0.272496f, 0.124758f },
-        //{ 0.057118f, 0.124758f, 0.057118f }
-        #endif
-        #if SIZE_X == 5
-        { 0.005008f, 0.017300f, 0.026151f, 0.017300f, 0.005008f },
-        { 0.017300f, 0.059761f, 0.090339f, 0.059761f, 0.017300f },
-        { 0.026151f, 0.090339f, 0.136565f, 0.090339f, 0.026151f },
-        { 0.017300f, 0.059761f, 0.090339f, 0.059761f, 0.017300f },
-        { 0.005008f, 0.017300f, 0.026151f, 0.017300f, 0.005008f }
-        #endif
-        #if SIZE_X == 7
-        { 0.000841, 0.003010, 0.006471, 0.008351, 0.006471, 0.003010, 0.000841 },
-        { 0.003010, 0.010778, 0.023169, 0.029902, 0.023169, 0.010778, 0.003010 },
-        { 0.006471, 0.023169, 0.049806, 0.064280, 0.049806, 0.023169, 0.006471 },
-        { 0.008351, 0.029902, 0.064280, 0.082959, 0.064280, 0.029902, 0.008351 },
-        { 0.006471, 0.023169, 0.049806, 0.064280, 0.049806, 0.023169, 0.006471 },
-        { 0.003010, 0.010778, 0.023169, 0.029902, 0.023169, 0.010778, 0.003010 },
-        { 0.000841, 0.003010, 0.006471, 0.008351, 0.006471, 0.003010, 0.000841 }
-        #endif
+    const uchar filter_xy[3][3] = {
+        { 1, 1, 1 },
+        { 1, 1, 1 },
+        { 1, 1, 1 }
     };
 
     const  char mask_x[3][3] = { {-1,  0,  1},//{-0.166666667f,          0.0f,  0.166666667f},
-                                 {-1,  0,  1},//{-0.166666667f,          0.0f,  0.166666667f},
+                                 {-2,  0,  2},//{-0.166666667f,          0.0f,  0.166666667f},
                                  {-1,  0,  1} };//{-0.166666667f,          0.0f,  0.166666667f} };
-    const  char mask_y[3][3] = { {-1, -1, -1},//{-0.166666667f, -0.166666667f, -0.166666667f},
+    const  char mask_y[3][3] = { {-1, -2, -1},//{-0.166666667f, -0.166666667f, -0.166666667f},
                                  { 0,  0,  0},//{         0.0f,          0.0f,          0.0f},
-                                 { 1,  1,  1} };//{ 0.166666667f,  0.166666667f,  0.166666667f} };
+                                 { 1,  2,  1} };//{ 0.166666667f,  0.166666667f,  0.166666667f} };
 
     Mask<uchar> G(filter_xy);
     Mask<char> MX(mask_x);
@@ -285,19 +271,52 @@ int main(int argc, const char **argv) {
     Domain DomX(MX);
     Domain DomY(MY);
 
+    // input and output image of width x height pixels
+    Image<uchar> IN(WIDTH, HEIGHT);
+    Image<uchar> OUT(WIDTH, HEIGHT);
+    Image<short> DX(WIDTH, HEIGHT);
+    Image<short> DY(WIDTH, HEIGHT);
+    Image<int> DXX(WIDTH, HEIGHT);
+    Image<int> DYY(WIDTH, HEIGHT);
+    Image<int> DXY(WIDTH, HEIGHT);
+    Image<int> GX(WIDTH, HEIGHT);
+    Image<int> GY(WIDTH, HEIGHT);
+    Image<int> GXY(WIDTH, HEIGHT);
+    Image<float> CIM(WIDTH, HEIGHT);
+
     IterationSpace<uchar> IsOut(OUT);
     IterationSpace<short> IsDx(DX);
     IterationSpace<short> IsDy(DY);
-    IterationSpace<short> IsDxy(DXY);
-    IterationSpace<short> IsSx(SX);
-    IterationSpace<short> IsSy(SY);
-    IterationSpace<short> IsSxy(SXY);
-
-    IN = host_in;
-    OUT = host_out;
+    IterationSpace<int> IsDxx(DXX);
+    IterationSpace<int> IsDyy(DYY);
+    IterationSpace<int> IsDxy(DXY);
+    IterationSpace<int> IsGx(GX);
+    IterationSpace<int> IsGy(GY);
+    IterationSpace<int> IsGxy(GXY);
+    IterationSpace<float> IsCim(CIM);
 
     BoundaryCondition<uchar> BcInClamp(IN, MX, Boundary::CLAMP);
     Accessor<uchar> AccInClamp(BcInClamp);
+
+    Accessor<short> AccDx(DX);
+    Accessor<short> AccDy(DY);
+
+    BoundaryCondition<int> BcInClampDxx(DXX, G, Boundary::CLAMP);
+    Accessor<int> AccInClampDxx(BcInClampDxx);
+    BoundaryCondition<int> BcInClampDyy(DYY, G, Boundary::CLAMP);
+    Accessor<int> AccInClampDyy(BcInClampDyy);
+    BoundaryCondition<int> BcInClampDxy(DXY, G, Boundary::CLAMP);
+    Accessor<int> AccInClampDxy(BcInClampDxy);
+
+    Accessor<int> AccGx(GX);
+    Accessor<int> AccGy(GY);
+    Accessor<int> AccGxy(GXY);
+    Domain dom(3, 3);
+    BoundaryCondition<float> BcInClampCim(CIM, G, Boundary::CLAMP);
+    Accessor<float> AccInClampCim(BcInClampCim);
+
+    IN = host_in;
+    OUT = host_out;
 
     Sobel DerivX(IsDx, AccInClamp, MX, DomX);
     DerivX.execute();
@@ -307,50 +326,36 @@ int main(int argc, const char **argv) {
     DerivY.execute();
     timing += hipacc_last_kernel_timing();
 
-
-    Accessor<short> AccDx(DX);
-    Accessor<short> AccDy(DY);
-
-
-    Square1 SquareX(IsSx, AccDx);
+    Square1 SquareX(IsDxx, AccDx);
     SquareX.execute();
     timing += hipacc_last_kernel_timing();
 
-    Square1 SquareY(IsSy, AccDy);
+    Square1 SquareY(IsDyy, AccDy);
     SquareY.execute();
     timing += hipacc_last_kernel_timing();
 
-    Square2 SquareXY(IsSxy, AccDx, AccDy);
+    Square2 SquareXY(IsDxy, AccDx, AccDy);
     SquareXY.execute();
     timing += hipacc_last_kernel_timing();
 
-
-    BoundaryCondition<short> BcInClampSx(SX, G, Boundary::CLAMP);
-    Accessor<short> AccInClampSx(BcInClampSx);
-    BoundaryCondition<short> BcInClampSy(SY, G, Boundary::CLAMP);
-    Accessor<short> AccInClampSy(BcInClampSy);
-    BoundaryCondition<short> BcInClampSxy(SXY, G, Boundary::CLAMP);
-    Accessor<short> AccInClampSxy(BcInClampSxy);
-
-
-    Gauss GaussX(IsDx, AccInClampSx, G);
+    Gauss GaussX(IsGx, AccInClampDxx, G);
     GaussX.execute();
     timing += hipacc_last_kernel_timing();
 
-    Gauss GaussY(IsDy, AccInClampSy, G);
+    Gauss GaussY(IsGy, AccInClampDyy, G);
     GaussY.execute();
     timing += hipacc_last_kernel_timing();
 
-    Gauss GaussXY(IsDxy, AccInClampSxy, G);
+    Gauss GaussXY(IsGxy, AccInClampDxy, G);
     GaussXY.execute();
     timing += hipacc_last_kernel_timing();
 
-
-    Accessor<short> AccDxy(DXY);
-
-
-    HarrisCorner HC(IsOut, AccDx, AccDy, AccDxy, k, threshold);
+    HarrisCorner HC(IsCim, AccGx, AccGy, AccGxy);
     HC.execute();
+    timing += hipacc_last_kernel_timing();
+
+    NonMaxSuppression NMS(IsOut, AccInClampCim, dom);
+    NMS.execute();
     timing += hipacc_last_kernel_timing();
 
     // get results
