@@ -8,10 +8,10 @@ COMMON_INC     ?= -I/usr/include \
                   -I$(TEST_CASE) \
                   -I/usr/include
 COMPILER_INC   ?= -std=c++11 \
-                  -resource-dir `/usr/bin/clang -print-file-name=` \
-                  -I`/usr/bin/clang -print-file-name=include` \
-                  -I`/usr/bin/llvm-config --includedir` \
-                  -I`/usr/bin/llvm-config --includedir`/c++/v1 \
+                  -resource-dir `/nobackup/jingpu/tools/llvm3.6/build/bin/clang -print-file-name=` \
+                  -I`/nobackup/jingpu/tools/llvm3.6/build/bin/clang -print-file-name=include` \
+                  -I`/nobackup/jingpu/tools/llvm3.6/build/bin/llvm-config --includedir` \
+                  -I`/nobackup/jingpu/tools/llvm3.6/build/bin/llvm-config --includedir`/c++/v1 \
                   -I$(HIPACC_DIR)/include/dsl \
                   $(COMMON_INC)
 TEST_CASE      ?= ./tests/laplace_rgba
