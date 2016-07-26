@@ -6,10 +6,11 @@
 open_project hipacc_project
 set_top hipaccRun
 add_files hipacc_run.cc
-add_files -tb main.cc
+add_files -tb main.cc -cflags "-I../../include"
 open_solution "solution1"
-set_part {xc7z100ffg900-2}
-create_clock -period 3.0 -name default
+#set_part {xc7z100ffg900-2}
+set_part {xc7z020clg484-1}
+create_clock -period 10 -name default
 source "./directives.tcl"
 csim_design -ldflags {-lrt} -clean
 config_bind -effort high

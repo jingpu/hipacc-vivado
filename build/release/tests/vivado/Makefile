@@ -148,9 +148,13 @@ endif
 
 export CPLUS_INCLUDE_PATH := $(CPLUS_INCLUDE_PATH):/horowitz/users/jingpu/nobackup/hipacc-vivado/build/release/include
 
-vivado:
+vivado: vivado_hls.log
+
+hipacc_run.cc main.cc: $(TEST_CASE)/main.cpp
 	@echo 'Executing HIPAcc Compiler for Vivado HLS:'
 	$(COMPILER) $(TEST_CASE)/main.cpp $(MYFLAGS) $(COMPILER_INC) -emit-vivado $(HIPACC_OPTS) -o main.cc
+
+vivado_hls.log: hipacc_run.cc main.cc script.tcl
 	vivado_hls -f script.tcl
 
 clean:
